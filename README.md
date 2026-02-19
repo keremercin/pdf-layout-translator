@@ -34,6 +34,18 @@ For OpenAI-first testing:
 - `OPENAI_API_KEY=...`
 - Suggested starter models: `OPENAI_TRANSLATE_MODEL=gpt-4.1-mini`, `OPENAI_OCR_MODEL=gpt-4.1-mini`
 
+## OpenAI presets
+- `./.env.openai.min-cost`: lower cost (`translate=gpt-4.1-nano`, `ocr=gpt-4.1-mini`)
+- `./.env.openai.balanced`: safer quality baseline (`translate=gpt-4.1-mini`, `ocr=gpt-4.1-mini`)
+- `./.env.local`: put only your secret key here (`OPENAI_API_KEY=...`), this file is git-ignored
+
+Usage:
+```bash
+cp .env.openai.balanced .env   # or .env.openai.min-cost
+cp .env.local.example .env.local
+# edit .env.local and set OPENAI_API_KEY
+```
+
 ## Telegram bot
 ```bash
 export TELEGRAM_BOT_TOKEN=...

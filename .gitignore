@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 .env
+.env.local
 uploads/*
 outputs/*
 !uploads/.gitkeep
