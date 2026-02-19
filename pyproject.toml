@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pdf-layout-translator"
 version = "0.2.0"
-description = "Telegram-first low-cost PDF translation API with OpenRouter"
+description = "Telegram-first low-cost PDF translation API with configurable provider models"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

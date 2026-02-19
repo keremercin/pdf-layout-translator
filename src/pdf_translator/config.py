@@ -5,10 +5,16 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     app_env: str = "dev"
-    app_version: str = "0.1.0"
+    app_version: str = "0.2.0"
     database_path: str = "data/jobs.db"
     upload_dir: str = "uploads"
     output_dir: str = "outputs"
+
+    model_provider: str = "openai"
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_translate_model: str = "gpt-4.1-mini"
+    openai_ocr_model: str = "gpt-4.1-mini"
 
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"

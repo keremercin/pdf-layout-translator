@@ -1,11 +1,11 @@
 # pdf-layout-translator
 
-Low-cost Telegram-first PDF translator using OpenRouter (Flash-Lite) for OCR + translation.
+Low-cost Telegram-first PDF translator using configurable provider models for OCR + translation.
 
 ## Scope (MVP S1)
 - Channel: Telegram-only
 - Language pairs: `tr,en` and `en,tr`
-- Model policy: Flash-Lite default
+- Model policy: provider-selectable (`openai` or `openrouter`)
 - Billing: credits with manual Stars verification
 - Retention: 24-hour cleanup
 
@@ -28,6 +28,11 @@ pip install -e .[dev]
 python scripts/init_db.py
 uvicorn pdf_translator.api.main:app --reload --port 8900
 ```
+
+For OpenAI-first testing:
+- `MODEL_PROVIDER=openai`
+- `OPENAI_API_KEY=...`
+- Suggested starter models: `OPENAI_TRANSLATE_MODEL=gpt-4.1-mini`, `OPENAI_OCR_MODEL=gpt-4.1-mini`
 
 ## Telegram bot
 ```bash
