@@ -34,6 +34,48 @@ def _chunk_text(text: str, chunk_size: int) -> list[str]:
     return chunks
 
 
+def _color_int_to_rgb(color_int: int | None) -> tuple[float, float, float]:
+    if color_int is None:
+        return (0.0, 0.0, 0.0)
+    r = (color_int >> 16) & 255
+    g = (color_int >> 8) & 255
+    b = color_int & 255
+    return (r / 255.0, g / 255.0, b / 255.0)
+
+
+def _paint_white(page: fitz.Page, rect: fitz.Rect) -> None:
+    page.draw_rect(rect, color=(1, 1, 1), fill=(1, 1, 1), overlay=True)
+
+
+def _fit_and_insert_text(
+    page: fitz.Page,
+    rect: fitz.Rect,
+    text: str,
+    preferred_size: float,
+    color: tuple[float, float, float] = (0, 0, 0),
+) -> bool:
+    size = max(6.0, min(20.0, preferred_size))
+    for _ in range(8):
+        rc = page.insert_textbox(rect, text, fontsize=size, color=color, align=0, overlay=True)
+        if rc >= 0:
+            return True
+        size -= 1.0
+        if size < 6.0:
+            break
+    return False
+
+
+def _insert_fallback_text(
+    page: fitz.Page,
+    rect: fitz.Rect,
+    text: str,
+    color: tuple[float, float, float] = (0, 0, 0),
+) -> None:
+    x = max(2.0, rect.x0)
+    y = max(8.0, rect.y0 + 8.0)
+    page.insert_text(fitz.Point(x, y), text[:1200], fontsize=8, color=color, overlay=True)
+
+
 def _translate_text(
     client: OpenRouterClient,
     source_lang: str,
@@ -60,30 +102,42 @@ def _translate_blocks_text_pdf(
     cache_get: Callable[[str, str, str], str | None] | None,
     cache_set: Callable[[str, str, str, str], None] | None,
 ) -> int:
-    blocks = page.get_text("blocks")
+    text_dict = page.get_text("dict")
     translated_count = 0
 
-    for block in blocks:
-        x0, y0, x1, y1, text, *_ = block
-        src = (text or "").strip()
-        if len(src) < 2:
+    for block in text_dict.get("blocks", []):
+        if block.get("type") != 0:
             continue
 
-        translated_parts = []
-        for chunk in _chunk_text(src, settings.block_chunk_chars):
-            translated_parts.append(
-                _translate_text(client, source_lang, target_lang, chunk, cache_get=cache_get, cache_set=cache_set)
-            )
+        for line in block.get("lines", []):
+            spans = line.get("spans", [])
+            if not spans:
+                continue
 
-        translated = "\n".join(translated_parts).strip()
-        if not translated:
-            continue
+            src = "".join((s.get("text") or "") for s in spans).strip()
+            if len(src) < 2:
+                continue
 
-        rect = fitz.Rect(x0, y0, x1, y1)
-        page.add_redact_annot(rect, fill=(1, 1, 1))
-        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
-        page.insert_textbox(rect, translated, fontsize=9, color=(0, 0, 0), align=0)
-        translated_count += 1
+            translated_parts = []
+            for chunk in _chunk_text(src, settings.block_chunk_chars):
+                translated_parts.append(
+                    _translate_text(client, source_lang, target_lang, chunk, cache_get=cache_get, cache_set=cache_set)
+                )
+
+            translated = "\n".join(translated_parts).strip()
+            if not translated:
+                continue
+
+            x0, y0, x1, y1 = line["bbox"]
+            rect = fitz.Rect(float(x0), float(y0), float(x1), float(y1))
+            first_span = spans[0]
+            preferred_size = float(first_span.get("size", 10.0))
+            color = _color_int_to_rgb(first_span.get("color"))
+
+            _paint_white(page, rect)
+            if not _fit_and_insert_text(page, rect, translated, preferred_size=preferred_size, color=color):
+                _insert_fallback_text(page, rect, translated, color=color)
+            translated_count += 1
 
     return translated_count
 
@@ -96,9 +150,26 @@ def _translate_blocks_scanned_pdf(
     cache_get: Callable[[str, str, str], str | None] | None,
     cache_set: Callable[[str, str, str, str], None] | None,
 ) -> int:
-    pix = page.get_pixmap(dpi=170)
+    dpi = 170
+    pix = page.get_pixmap(dpi=dpi)
     ocr_blocks = client.ocr_page(pix.tobytes("png"), source_lang=source_lang)
     translated_count = 0
+    max_x = 0.0
+    max_y = 0.0
+    for b in ocr_blocks:
+        try:
+            max_x = max(max_x, float(b.get("x1", 0)))
+            max_y = max(max_y, float(b.get("y1", 0)))
+        except (TypeError, ValueError):
+            continue
+
+    # OCR providers may return either image-pixel coordinates or page-point coordinates.
+    if max_x > page.rect.width * 1.25 or max_y > page.rect.height * 1.25:
+        sx = page.rect.width / max(pix.width, 1)
+        sy = page.rect.height / max(pix.height, 1)
+    else:
+        sx = 1.0
+        sy = 1.0
 
     for b in ocr_blocks:
         src = str(b.get("text", "")).strip()
@@ -115,8 +186,19 @@ def _translate_blocks_scanned_pdf(
         if not translated:
             continue
 
-        rect = fitz.Rect(float(b["x0"]), float(b["y0"]), float(b["x1"]), float(b["y1"]))
-        page.insert_textbox(rect, translated, fontsize=9, color=(0, 0, 0), align=0)
+        x0 = float(b["x0"]) * sx
+        y0 = float(b["y0"]) * sy
+        x1 = float(b["x1"]) * sx
+        y1 = float(b["y1"]) * sy
+        rect = fitz.Rect(x0, y0, x1, y1)
+        if rect.width < 4 or rect.height < 4:
+            continue
+
+        # Erase source glyphs in scanned image region before placing translation.
+        _paint_white(page, rect)
+        preferred_size = max(7.0, min(16.0, rect.height * 0.72))
+        if not _fit_and_insert_text(page, rect, translated, preferred_size=preferred_size, color=(0, 0, 0)):
+            _insert_fallback_text(page, rect, translated, color=(0, 0, 0))
         translated_count += 1
 
     return translated_count
