@@ -17,6 +17,17 @@ class Settings(BaseSettings):
     openrouter_fallback_model: str = "google/gemini-2.5-flash"
 
     max_file_mb: int = 80
+    max_pages_per_job: int = 150
+    allowed_langs: str = "tr,en"
+
+    ocr_timeout_sec: int = 45
+    translate_timeout_sec: int = 25
+    job_timeout_sec: int = 1800
+
+    block_chunk_chars: int = 1400
+    retention_hours: int = 24
+
+    admin_api_token: str = ""
     api_base_url: str = "http://localhost:8900"
     telegram_bot_token: str = ""
 

@@ -1,22 +1,23 @@
 # pdf-layout-translator
 
-Low-cost API-first PDF translator using OpenRouter for OCR + translation.
+Low-cost Telegram-first PDF translator using OpenRouter (Flash-Lite) for OCR + translation.
 
-## What this MVP does
-- Upload a PDF and create async translation jobs
-- Extracts text blocks from text-based PDFs
-- Falls back to model-based OCR for scanned pages
-- Translates blocks with a low-cost model (`flash-lite` default)
-- Rebuilds translated PDF with block-level placement
-- Exposes job status and download endpoints
-- Includes Telegram bot adapter
+## Scope (MVP S1)
+- Channel: Telegram-only
+- Language pairs: `tr,en` and `en,tr`
+- Model policy: Flash-Lite default
+- Billing: credits with manual Stars verification
+- Retention: 24-hour cleanup
 
 ## API
 - `GET /health`
 - `GET /version`
-- `POST /v1/jobs` (multipart file + source_lang + target_lang)
+- `POST /v1/jobs` (multipart: file, source_lang, target_lang, telegram_user_id)
 - `GET /v1/jobs/{job_id}`
-- `GET /v1/jobs/{job_id}/download`
+- `GET /v1/jobs/{job_id}/download?telegram_user_id=...`
+- `GET /v1/credits/{telegram_user_id}`
+- `POST /v1/admin/credits/grant` (Header: `x-admin-token`)
+- `GET /v1/admin/jobs/stats` (Header: `x-admin-token`)
 
 ## Quickstart
 ```bash
@@ -34,7 +35,19 @@ export TELEGRAM_BOT_TOKEN=...
 python -m pdf_translator.bot.telegram_bot
 ```
 
+## Credits and manual payment flow
+1. User checks `/pricing`
+2. User requests `/buy` and receives reference code
+3. Admin verifies Stars payment externally
+4. Admin grants credits via `POST /v1/admin/credits/grant`
+
+## Cleanup
+Run periodic cleanup (cron):
+```bash
+python scripts/cleanup_expired.py
+```
+
 ## Notes
-- This is an MVP focused on low-cost operation.
-- Layout preservation is block-based and not perfect for all complex PDFs.
-- For better quality, configure fallback model for low-confidence chunks.
+- Page limit per job: 150
+- File size limit: 80MB
+- Layout preservation is block-based (best effort)

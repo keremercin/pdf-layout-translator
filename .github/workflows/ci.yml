@@ -20,4 +20,4 @@ jobs:
       - name: Lint
         run: ruff check src tests scripts
       - name: Tests
-        run: pytest -s tests/test_health.py tests/test_version.py
+        run: pytest -s
