@@ -1,4 +1,4 @@
-.PHONY: install init-db cleanup run-api run-bot test lint smoke-model
+.PHONY: install init-db cleanup run-api run-bot test lint smoke-model smoke-reference
 
 install:
 	python -m venv .venv && . .venv/bin/activate && python -m pip install -e .[dev]
@@ -23,3 +23,6 @@ lint:
 
 smoke-model:
 	python scripts/smoke_pdf_model.py
+
+smoke-reference:
+	python scripts/smoke_reference_pdf.py

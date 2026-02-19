@@ -53,6 +53,23 @@ make smoke-model
 ```
 This command creates sample PDFs under `data/smoke/`, opens jobs through the API app, waits for completion, and saves translated outputs under `outputs/`.
 
+## Single fixed reference PDF (always use this)
+Reference test file:
+- `data/fixtures/reference_english.pdf`
+- Source: `https://arxiv.org/pdf/1706.03762.pdf`
+
+Run fixed-file smoke:
+```bash
+make smoke-reference
+```
+Output file:
+- `outputs/reference_english_en_tr.translated.pdf`
+
+Tuning (same reference PDF, faster loops):
+- `SMOKE_REFERENCE_PAGES=5` (default, first 5 pages)
+- `SMOKE_REFERENCE_PAGES=15` (full file)
+- `SMOKE_REFERENCE_TIMEOUT_SEC=420`
+
 ## Telegram bot
 ```bash
 export TELEGRAM_BOT_TOKEN=...
