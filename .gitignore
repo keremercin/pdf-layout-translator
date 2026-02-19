@@ -11,4 +11,5 @@ outputs/*
 !uploads/.gitkeep
 !outputs/.gitkeep
 data/*.db
+data/smoke/
 .DS_Store
