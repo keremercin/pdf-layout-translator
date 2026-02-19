@@ -46,6 +46,13 @@ cp .env.local.example .env.local
 # edit .env.local and set OPENAI_API_KEY
 ```
 
+## Pre-Telegram model smoke test
+Run model-level PDF validation (text-layer + scanned-like):
+```bash
+make smoke-model
+```
+This command creates sample PDFs under `data/smoke/`, opens jobs through the API app, waits for completion, and saves translated outputs under `outputs/`.
+
 ## Telegram bot
 ```bash
 export TELEGRAM_BOT_TOKEN=...
