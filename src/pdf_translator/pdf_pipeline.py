@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from pathlib import Path
+import re
 
 import fitz
 
@@ -32,6 +33,20 @@ def _chunk_text(text: str, chunk_size: int) -> list[str]:
             chunks.append(part)
         cursor = end
     return chunks
+
+
+def _normalize_source_text(text: str) -> str:
+    text = text.replace("\u00ad", "")
+    text = text.replace("\ufb01", "fi").replace("\ufb02", "fl")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _should_translate_text(text: str) -> bool:
+    if len(text) < 3:
+        return False
+    alpha = sum(ch.isalpha() for ch in text)
+    return alpha >= 3 and (alpha / max(len(text), 1)) > 0.30
 
 
 def _color_int_to_rgb(color_int: int | None) -> tuple[float, float, float]:
@@ -76,6 +91,21 @@ def _insert_fallback_text(
     page.insert_text(fitz.Point(x, y), text[:1200], fontsize=8, color=color, overlay=True)
 
 
+def _is_vertical_or_margin_line(page: fitz.Page, rect: fitz.Rect) -> bool:
+    if rect.width <= 0 or rect.height <= 0:
+        return True
+    # Very tall and narrow shapes are usually rotated side labels (e.g. arXiv margin id)
+    if rect.height > rect.width * 3.5:
+        return True
+
+    left_margin = page.rect.width * 0.08
+    right_margin = page.rect.width * 0.92
+    if rect.x1 < left_margin or rect.x0 > right_margin:
+        if rect.height > 25:
+            return True
+    return False
+
+
 def _translate_text(
     client: OpenRouterClient,
     source_lang: str,
@@ -114,8 +144,13 @@ def _translate_blocks_text_pdf(
             if not spans:
                 continue
 
-            src = "".join((s.get("text") or "") for s in spans).strip()
-            if len(src) < 2:
+            x0, y0, x1, y1 = line["bbox"]
+            rect = fitz.Rect(float(x0), float(y0), float(x1), float(y1))
+            if _is_vertical_or_margin_line(page, rect):
+                continue
+
+            src = _normalize_source_text(" ".join((s.get("text") or "").strip() for s in spans))
+            if not _should_translate_text(src):
                 continue
 
             translated_parts = []
@@ -128,8 +163,6 @@ def _translate_blocks_text_pdf(
             if not translated:
                 continue
 
-            x0, y0, x1, y1 = line["bbox"]
-            rect = fitz.Rect(float(x0), float(y0), float(x1), float(y1))
             first_span = spans[0]
             preferred_size = float(first_span.get("size", 10.0))
             color = _color_int_to_rgb(first_span.get("color"))
@@ -172,8 +205,8 @@ def _translate_blocks_scanned_pdf(
         sy = 1.0
 
     for b in ocr_blocks:
-        src = str(b.get("text", "")).strip()
-        if len(src) < 2:
+        src = _normalize_source_text(str(b.get("text", "")))
+        if not _should_translate_text(src):
             continue
 
         translated_parts = []
