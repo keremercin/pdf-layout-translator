@@ -70,6 +70,16 @@ Tuning (same reference PDF, faster loops):
 - `SMOKE_REFERENCE_PAGES=15` (full file)
 - `SMOKE_REFERENCE_TIMEOUT_SEC=420`
 
+## Candidate benchmark (our engine vs external tools)
+Run a quick layout benchmark on first 2 pages:
+```bash
+python scripts/benchmark_layout_candidates.py
+```
+Expected candidate paths:
+- `outputs/reference_english_en_tr.translated.pdf`
+- `outputs/bench_pdf2zh/reference_english-mono.pdf`
+- `outputs/bench_pdf2zh_babeldoc/reference_english.tr.mono.pdf`
+
 ## Telegram bot
 ```bash
 export TELEGRAM_BOT_TOKEN=...
