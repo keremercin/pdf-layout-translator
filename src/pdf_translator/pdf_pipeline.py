@@ -1,11 +1,19 @@
+import re
 from collections.abc import Callable
 from pathlib import Path
-import re
 
 import fitz
 
 from pdf_translator.config import settings
 from pdf_translator.openrouter import OpenRouterClient
+
+_FONT_DIR = Path(__file__).resolve().parents[2] / "assets" / "fonts"
+_FONT_FILES = {
+    "noto_sans": _FONT_DIR / "NotoSans-Regular.ttf",
+    "noto_sans_bold": _FONT_DIR / "NotoSans-Bold.ttf",
+    "noto_serif": _FONT_DIR / "NotoSerif-Regular.ttf",
+    "noto_serif_bold": _FONT_DIR / "NotoSerif-Bold.ttf",
+}
 
 
 def _has_text_layer(page: fitz.Page) -> bool:
@@ -67,11 +75,13 @@ def _fit_and_insert_text(
     rect: fitz.Rect,
     text: str,
     preferred_size: float,
+    fontname: str,
+    align: int,
     color: tuple[float, float, float] = (0, 0, 0),
 ) -> bool:
     size = max(6.0, min(20.0, preferred_size))
     for _ in range(8):
-        rc = page.insert_textbox(rect, text, fontsize=size, color=color, align=0, overlay=True)
+        rc = page.insert_textbox(rect, text, fontsize=size, fontname=fontname, color=color, align=align, overlay=True)
         if rc >= 0:
             return True
         size -= 1.0
@@ -84,11 +94,41 @@ def _insert_fallback_text(
     page: fitz.Page,
     rect: fitz.Rect,
     text: str,
+    fontname: str,
     color: tuple[float, float, float] = (0, 0, 0),
 ) -> None:
     x = max(2.0, rect.x0)
     y = max(8.0, rect.y0 + 8.0)
-    page.insert_text(fitz.Point(x, y), text[:1200], fontsize=8, color=color, overlay=True)
+    page.insert_text(fitz.Point(x, y), text[:1200], fontsize=8, fontname=fontname, color=color, overlay=True)
+
+
+def _ensure_fonts(page: fitz.Page) -> None:
+    for alias, path in _FONT_FILES.items():
+        if path.exists():
+            page.insert_font(fontname=alias, fontfile=str(path))
+
+
+def _span_style(spans: list[dict]) -> tuple[str, bool]:
+    first = spans[0] if spans else {}
+    name = str(first.get("font", "")).lower()
+    flags = int(first.get("flags", 0))
+    bold = "bold" in name or bool(flags & (1 << 4))
+    serif = "times" in name or "serif" in name or bool(flags & 1)
+    if serif and bold:
+        return "noto_serif_bold", True
+    if serif:
+        return "noto_serif", False
+    if bold:
+        return "noto_sans_bold", True
+    return "noto_sans", False
+
+
+def _line_align(page: fitz.Page, rect: fitz.Rect) -> int:
+    center = page.rect.width / 2.0
+    rect_center = (rect.x0 + rect.x1) / 2.0
+    if abs(rect_center - center) <= page.rect.width * 0.08:
+        return 1
+    return 0
 
 
 def _is_vertical_or_margin_line(page: fitz.Page, rect: fitz.Rect) -> bool:
@@ -111,16 +151,28 @@ def _translate_text(
     source_lang: str,
     target_lang: str,
     text: str,
+    max_chars: int | None,
+    max_lines: int | None,
     cache_get: Callable[[str, str, str], str | None] | None,
     cache_set: Callable[[str, str, str, str], None] | None,
 ) -> str:
-    cached = cache_get(source_lang, target_lang, text) if cache_get else None
+    cache_text = text
+    if max_chars or max_lines:
+        cache_text = f"{text}||mc={max_chars or 0}||ml={max_lines or 0}"
+
+    cached = cache_get(source_lang, target_lang, cache_text) if cache_get else None
     if cached:
         return cached
 
-    translated = client.translate_text(text, source_lang=source_lang, target_lang=target_lang)
+    translated = client.translate_text(
+        text,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        max_chars=max_chars,
+        max_lines=max_lines,
+    )
     if cache_set:
-        cache_set(source_lang, target_lang, text, translated)
+        cache_set(source_lang, target_lang, cache_text, translated)
     return translated
 
 
@@ -132,6 +184,7 @@ def _translate_blocks_text_pdf(
     cache_get: Callable[[str, str, str], str | None] | None,
     cache_set: Callable[[str, str, str, str], None] | None,
 ) -> int:
+    _ensure_fonts(page)
     text_dict = page.get_text("dict")
     translated_count = 0
 
@@ -156,7 +209,16 @@ def _translate_blocks_text_pdf(
             translated_parts = []
             for chunk in _chunk_text(src, settings.block_chunk_chars):
                 translated_parts.append(
-                    _translate_text(client, source_lang, target_lang, chunk, cache_get=cache_get, cache_set=cache_set)
+                    _translate_text(
+                        client,
+                        source_lang,
+                        target_lang,
+                        chunk,
+                        max_chars=max(24, int(len(chunk) * 1.12)),
+                        max_lines=1,
+                        cache_get=cache_get,
+                        cache_set=cache_set,
+                    )
                 )
 
             translated = "\n".join(translated_parts).strip()
@@ -166,10 +228,20 @@ def _translate_blocks_text_pdf(
             first_span = spans[0]
             preferred_size = float(first_span.get("size", 10.0))
             color = _color_int_to_rgb(first_span.get("color"))
+            fontname, _ = _span_style(spans)
+            align = _line_align(page, rect)
 
             _paint_white(page, rect)
-            if not _fit_and_insert_text(page, rect, translated, preferred_size=preferred_size, color=color):
-                _insert_fallback_text(page, rect, translated, color=color)
+            if not _fit_and_insert_text(
+                page,
+                rect,
+                translated,
+                preferred_size=preferred_size,
+                fontname=fontname,
+                align=align,
+                color=color,
+            ):
+                _insert_fallback_text(page, rect, translated, fontname=fontname, color=color)
             translated_count += 1
 
     return translated_count
@@ -183,6 +255,7 @@ def _translate_blocks_scanned_pdf(
     cache_get: Callable[[str, str, str], str | None] | None,
     cache_set: Callable[[str, str, str, str], None] | None,
 ) -> int:
+    _ensure_fonts(page)
     dpi = 170
     pix = page.get_pixmap(dpi=dpi)
     ocr_blocks = client.ocr_page(pix.tobytes("png"), source_lang=source_lang)
@@ -212,7 +285,16 @@ def _translate_blocks_scanned_pdf(
         translated_parts = []
         for chunk in _chunk_text(src, settings.block_chunk_chars):
             translated_parts.append(
-                _translate_text(client, source_lang, target_lang, chunk, cache_get=cache_get, cache_set=cache_set)
+                _translate_text(
+                    client,
+                    source_lang,
+                    target_lang,
+                    chunk,
+                    max_chars=max(24, int(len(chunk) * 1.18)),
+                    max_lines=2,
+                    cache_get=cache_get,
+                    cache_set=cache_set,
+                )
             )
 
         translated = "\n".join(translated_parts).strip()
@@ -230,8 +312,16 @@ def _translate_blocks_scanned_pdf(
         # Erase source glyphs in scanned image region before placing translation.
         _paint_white(page, rect)
         preferred_size = max(7.0, min(16.0, rect.height * 0.72))
-        if not _fit_and_insert_text(page, rect, translated, preferred_size=preferred_size, color=(0, 0, 0)):
-            _insert_fallback_text(page, rect, translated, color=(0, 0, 0))
+        if not _fit_and_insert_text(
+            page,
+            rect,
+            translated,
+            preferred_size=preferred_size,
+            fontname="noto_sans",
+            align=0,
+            color=(0, 0, 0),
+        ):
+            _insert_fallback_text(page, rect, translated, fontname="noto_sans", color=(0, 0, 0))
         translated_count += 1
 
     return translated_count

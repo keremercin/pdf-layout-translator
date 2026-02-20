@@ -69,13 +69,27 @@ class OpenRouterClient:
         assert last_err is not None
         raise last_err
 
-    def translate_text(self, text: str, source_lang: str, target_lang: str, model: str | None = None) -> str:
+    def translate_text(
+        self,
+        text: str,
+        source_lang: str,
+        target_lang: str,
+        model: str | None = None,
+        max_chars: int | None = None,
+        max_lines: int | None = None,
+    ) -> str:
         if not model:
             model = settings.openai_translate_model if self.provider == "openai" else settings.openrouter_translate_model
+        length_rules = ""
+        if max_chars:
+            length_rules += f" Keep output roughly within {max_chars} characters."
+        if max_lines:
+            length_rules += f" Use no more than {max_lines} lines."
         prompt = (
             f"Translate from {source_lang} to {target_lang}. "
             "Preserve meaning, numbers, symbols and line intent. "
-            "Return only translated text.\n\n"
+            "Do not add explanations. Return only translated text."
+            f"{length_rules}\n\n"
             f"TEXT:\n{text}"
         )
         body = {
