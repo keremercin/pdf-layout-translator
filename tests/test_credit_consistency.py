@@ -2,7 +2,14 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from pdf_translator.db import capture_reserved, get_user, grant_credits, list_ledger, release_reserved, reserve_credits
+from pdf_translator.db import (
+    capture_reserved,
+    get_user,
+    grant_credits,
+    list_ledger,
+    release_reserved,
+    reserve_credits,
+)
 
 
 def test_retry_release_cannot_mint_credits():
@@ -79,7 +86,12 @@ def test_zero_credit_legacy_job_can_finalize():
 
 
 def test_offline_recovery_refunds_once_and_preserves_queued_jobs():
-    from pdf_translator.db import claim_job, create_job, get_job, recover_interrupted_jobs
+    from pdf_translator.db import (
+        claim_job,
+        create_job,
+        get_job,
+        recover_interrupted_jobs,
+    )
     grant_credits(99, 10, 'seed')
     for job in ['interrupted', 'queued']:
         reserve_credits(99, 3, job)

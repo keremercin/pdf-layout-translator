@@ -140,10 +140,7 @@ def _is_vertical_or_margin_line(page: fitz.Page, rect: fitz.Rect) -> bool:
 
     left_margin = page.rect.width * 0.08
     right_margin = page.rect.width * 0.92
-    if rect.x1 < left_margin or rect.x0 > right_margin:
-        if rect.height > 25:
-            return True
-    return False
+    return (rect.x1 < left_margin or rect.x0 > right_margin) and rect.height > 25
 
 
 def _translate_text(

@@ -4,11 +4,16 @@ from pathlib import Path
 
 import httpx
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
-from pdf_translator.config import settings
 from pdf_translator.auth import issue_user_token
-
+from pdf_translator.config import settings
 
 PRICING_TEXT = (
     "Pricing (manual credit packs):\n"

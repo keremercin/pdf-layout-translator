@@ -5,13 +5,18 @@ from pdf_translator.config import settings
 from pdf_translator.db import (
     add_job_page,
     claim_job,
+    finish_job,
     get_cached_translation,
     get_job,
-    finish_job,
     set_cached_translation,
     update_job_status,
 )
-from pdf_translator.openrouter import OCRParseError, OCRTimeoutError, OpenRouterError, TranslateTimeoutError
+from pdf_translator.openrouter import (
+    OCRParseError,
+    OCRTimeoutError,
+    OpenRouterError,
+    TranslateTimeoutError,
+)
 from pdf_translator.pdf_pipeline import translate_pdf
 
 
@@ -71,6 +76,6 @@ def process_job(job_id: str) -> None:
         if charged != int(job['credits_reserved']):
             raise ValueError("Processed pages do not match reserved credits")
         finish_job(job_id, output_path=output_path)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - job boundary must refund on any processing failure
         code = _failure_code(exc)
         finish_job(job_id, error=str(exc), failure_code=code)

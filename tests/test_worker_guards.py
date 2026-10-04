@@ -5,7 +5,7 @@ from pdf_translator import worker
 
 def test_terminal_job_is_not_retranslated_or_rebilled(monkeypatch):
     for status in ['completed', 'failed']:
-        monkeypatch.setattr(worker, 'get_job', lambda job_id: {'status': status})
+        monkeypatch.setattr(worker, 'get_job', lambda job_id, status=status: {'status': status})
         translate = Mock()
         capture = Mock()
         monkeypatch.setattr(worker, 'translate_pdf', translate)

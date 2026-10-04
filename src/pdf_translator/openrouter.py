@@ -61,7 +61,7 @@ class OpenRouterClient:
                     last_err = ModelProviderError(f"transient_http_{code}")
                 else:
                     raise ModelProviderError(f"http_{code}: {exc.response.text}") from exc
-            except Exception as exc:
+            except (httpx.RequestError, ValueError, ModelProviderError) as exc:
                 last_err = ModelProviderError(str(exc))
 
             time.sleep(0.6 * (attempt + 1))

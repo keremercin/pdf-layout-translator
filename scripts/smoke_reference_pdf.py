@@ -1,7 +1,7 @@
 import os
 import time
-from tempfile import TemporaryDirectory
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import fitz
 from fastapi.testclient import TestClient

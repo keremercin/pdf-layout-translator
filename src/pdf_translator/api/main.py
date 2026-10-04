@@ -3,11 +3,21 @@ from typing import Annotated
 from uuid import uuid4
 
 import fitz
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    UploadFile,
+)
 from fastapi.responses import FileResponse
 
-from pdf_translator.config import settings
 from pdf_translator.auth import require_user
+from pdf_translator.config import settings
 from pdf_translator.db import (
     create_job,
     get_daily_stats,
@@ -16,8 +26,8 @@ from pdf_translator.db import (
     grant_credits,
     init_db,
     list_ledger,
-    reserve_credits,
     release_reserved,
+    reserve_credits,
 )
 from pdf_translator.schemas import AdminGrantRequest, CreditBalanceResponse, JobResponse
 from pdf_translator.worker import process_job

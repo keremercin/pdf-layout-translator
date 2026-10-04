@@ -7,7 +7,6 @@ import fitz
 
 from pdf_translator.pdf_pipeline import translate_pdf
 
-
 TRANSLATIONS = {
     'Monthly Operations Report': 'Aylik Operasyon Raporu',
     'Delivery deadline: 15 days after approval.': 'Teslim suresi: onaydan sonra 15 gun.',

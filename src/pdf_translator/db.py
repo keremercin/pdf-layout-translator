@@ -424,7 +424,7 @@ def list_expired_jobs() -> list[dict]:
 
 
 def get_cached_translation(source_lang: str, target_lang: str, text: str) -> str | None:
-    key = hashlib.sha256(f"{source_lang}|{target_lang}|{text}".encode("utf-8")).hexdigest()
+    key = hashlib.sha256(f"{source_lang}|{target_lang}|{text}".encode()).hexdigest()
     with _conn() as conn:
         row = conn.execute(
             "SELECT translated_text FROM translation_cache WHERE cache_key=?",
@@ -434,7 +434,7 @@ def get_cached_translation(source_lang: str, target_lang: str, text: str) -> str
 
 
 def set_cached_translation(source_lang: str, target_lang: str, text: str, translated_text: str) -> None:
-    key = hashlib.sha256(f"{source_lang}|{target_lang}|{text}".encode("utf-8")).hexdigest()
+    key = hashlib.sha256(f"{source_lang}|{target_lang}|{text}".encode()).hexdigest()
     with _conn() as conn:
         conn.execute(
             """
