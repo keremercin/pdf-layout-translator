@@ -7,6 +7,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from pdf_translator.config import settings
+from pdf_translator.auth import issue_user_token
 
 
 PRICING_TEXT = (
@@ -18,10 +19,10 @@ PRICING_TEXT = (
 )
 
 
-async def _poll_job(job_id: str) -> dict:
+async def _poll_job(job_id: str, telegram_user_id: int) -> dict:
     async with httpx.AsyncClient(timeout=30) as client:
         for _ in range(120):
-            r = await client.get(f"{settings.api_base_url}/v1/jobs/{job_id}")
+            r = await client.get(f"{settings.api_base_url}/v1/jobs/{job_id}", headers={"x-user-token": issue_user_token(telegram_user_id)})
             r.raise_for_status()
             data = r.json()["data"]
             if data["status"] in {"completed", "failed"}:
@@ -32,7 +33,7 @@ async def _poll_job(job_id: str) -> dict:
 
 async def _get_balance(telegram_user_id: int) -> dict:
     async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(f"{settings.api_base_url}/v1/credits/{telegram_user_id}")
+        r = await client.get(f"{settings.api_base_url}/v1/credits/{telegram_user_id}", headers={"x-user-token": issue_user_token(telegram_user_id)})
         r.raise_for_status()
         return r.json()["data"]["balance"]
 
@@ -77,9 +78,11 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Usage: /status <job_id>")
         return
 
+    if not update.effective_user:
+        return
     job_id = context.args[0]
     async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(f"{settings.api_base_url}/v1/jobs/{job_id}")
+        r = await client.get(f"{settings.api_base_url}/v1/jobs/{job_id}", headers={"x-user-token": issue_user_token(update.effective_user.id)})
 
     if r.status_code == 404:
         await update.message.reply_text("Job not found")
@@ -117,7 +120,7 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 "target_lang": target_lang,
                 "telegram_user_id": str(update.effective_user.id),
             }
-            r = await client.post(f"{settings.api_base_url}/v1/jobs", files=files, data=data)
+            r = await client.post(f"{settings.api_base_url}/v1/jobs", files=files, data=data, headers={"x-user-token": issue_user_token(update.effective_user.id)})
 
         if r.status_code in {402, 403}:
             await update.message.reply_text("Insufficient credits. Use /buy and /balance")
@@ -129,7 +132,7 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         job = r.json()["data"]
         await update.message.reply_text(f"Job created: {job['job_id']} ({job['pages_total']} pages)")
 
-        final_job = await _poll_job(job["job_id"])
+        final_job = await _poll_job(job["job_id"], update.effective_user.id)
         if final_job["status"] == "failed":
             await update.message.reply_text(
                 f"Job failed: {final_job.get('failure_reason_code', 'UNKNOWN')} / {final_job.get('error', '')}"
@@ -140,6 +143,7 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             dr = await client.get(
                 f"{settings.api_base_url}/v1/jobs/{job['job_id']}/download",
                 params={"telegram_user_id": update.effective_user.id},
+                headers={"x-user-token": issue_user_token(update.effective_user.id)},
             )
             dr.raise_for_status()
             out_path = Path(td) / f"{job['job_id']}.translated.pdf"

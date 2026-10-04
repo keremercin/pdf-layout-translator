@@ -2,6 +2,7 @@ import fitz
 from fastapi.testclient import TestClient
 
 from pdf_translator.api.main import app
+from pdf_translator.auth import issue_user_token
 
 
 def _pdf_bytes(page_count: int) -> bytes:
@@ -15,7 +16,7 @@ def _pdf_bytes(page_count: int) -> bytes:
 
 
 def test_lang_pair_validation() -> None:
-    c = TestClient(app)
+    c = TestClient(app, headers={"x-user-token": issue_user_token(1)})
     payload = _pdf_bytes(1)
     r = c.post(
         '/v1/jobs',
@@ -26,7 +27,7 @@ def test_lang_pair_validation() -> None:
 
 
 def test_page_limit_validation() -> None:
-    c = TestClient(app)
+    c = TestClient(app, headers={"x-user-token": issue_user_token(1)})
     payload = _pdf_bytes(151)
     r = c.post(
         '/v1/jobs',
@@ -37,7 +38,7 @@ def test_page_limit_validation() -> None:
 
 
 def test_insufficient_credits() -> None:
-    c = TestClient(app)
+    c = TestClient(app, headers={"x-user-token": issue_user_token(1)})
     payload = _pdf_bytes(2)
     r = c.post(
         '/v1/jobs',

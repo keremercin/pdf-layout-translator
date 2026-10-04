@@ -20,6 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+demo = ["streamlit>=1.37.0"]
 dev = [
   "pytest>=8.3.2",
   "ruff>=0.5.6",

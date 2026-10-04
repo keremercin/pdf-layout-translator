@@ -1,0 +1,14 @@
+{
+  "notice": "Synthetic document; deterministic fixture translation, not AI quality evidence. Actual PDF layout pipeline executed. No provider request.",
+  "metrics": {
+    "pages_total": 1,
+    "text_pages": 1,
+    "ocr_pages": 0
+  },
+  "translations": {
+    "Monthly Operations Report": "Aylik Operasyon Raporu",
+    "Delivery deadline: 15 days after approval.": "Teslim suresi: onaydan sonra 15 gun.",
+    "Payment amount: USD 5,000.": "Odeme tutari: 5.000 USD.",
+    "Contact the team through written messages.": "Ekiple yazili mesajlar araciligiyla iletisim kurun."
+  }
+}

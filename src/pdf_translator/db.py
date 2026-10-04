@@ -199,6 +199,12 @@ def reserve_credits(telegram_user_id: int, pages: int, job_id: str) -> bool:
         return True
     ensure_user(telegram_user_id)
     with _conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        prior = conn.execute("SELECT telegram_user_id,pages FROM credit_ledger WHERE job_id=? AND type='reserve'", (job_id,)).fetchone()
+        if prior:
+            if prior['telegram_user_id'] != telegram_user_id or prior['pages'] != pages:
+                raise ValueError("Reservation identity or amount mismatch")
+            return True
         user = conn.execute(
             "SELECT available_credits, reserved_credits FROM users WHERE telegram_user_id=?",
             (telegram_user_id,),
@@ -225,51 +231,56 @@ def reserve_credits(telegram_user_id: int, pages: int, job_id: str) -> bool:
     return True
 
 
-def capture_reserved(telegram_user_id: int, pages: int, job_id: str) -> None:
-    if pages <= 0:
+def _settle_reserved(telegram_user_id: int, pages: int, job_id: str, kind: str, note: str, *, final_status: str | None = None, output_path: str | None = None, failure_code: str | None = None) -> None:
+    if pages < 0:
+        raise ValueError("Settlement amount cannot be negative")
+    if pages == 0 and not final_status:
         return
     with _conn() as conn:
-        conn.execute(
-            """
-            UPDATE users
-            SET reserved_credits = CASE WHEN reserved_credits >= ? THEN reserved_credits - ? ELSE 0 END,
-                last_seen_at=?
-            WHERE telegram_user_id=?
-            """,
-            (pages, pages, _now(), telegram_user_id),
-        )
-        conn.execute(
-            """
-            INSERT INTO credit_ledger (telegram_user_id, type, pages, job_id, note, created_at)
-            VALUES (?, 'capture', ?, ?, 'job completed', ?)
-            """,
-            (telegram_user_id, pages, job_id, _now()),
-        )
-        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        if final_status:
+            job = conn.execute("SELECT owner_telegram_user_id,status FROM jobs WHERE job_id=?", (job_id,)).fetchone()
+            if not job or job['owner_telegram_user_id'] != telegram_user_id:
+                raise ValueError("Job owner mismatch")
+            if job['status'] != 'running':
+                if job['status'] == final_status:
+                    return
+                raise ValueError("Only running jobs may be finalized")
+        reservation = conn.execute("SELECT telegram_user_id,pages FROM credit_ledger WHERE job_id=? AND type='reserve'", (job_id,)).fetchone()
+        if pages > 0 and (not reservation or reservation['telegram_user_id'] != telegram_user_id or reservation['pages'] != pages):
+            raise ValueError("Settlement must match a durable reservation")
+        previous = conn.execute("SELECT type FROM credit_ledger WHERE job_id=? AND type IN ('capture','release')", (job_id,)).fetchone()
+        if previous:
+            if previous['type'] != kind:
+                raise ValueError("Reservation already settled differently")
+            return
+        refund = pages if kind == 'release' else 0
+        changed = conn.execute("UPDATE users SET reserved_credits=reserved_credits-?, available_credits=available_credits+?, last_seen_at=? WHERE telegram_user_id=? AND reserved_credits>=?", (pages, refund, _now(), telegram_user_id, pages)).rowcount
+        if pages > 0 and changed != 1:
+            raise ValueError("Reserved balance invariant violated")
+        conn.execute("INSERT INTO credit_ledger (telegram_user_id,type,pages,job_id,note,created_at) VALUES (?,?,?,?,?,?)", (telegram_user_id, kind, pages, job_id, note, _now()))
+        if final_status:
+            conn.execute("UPDATE jobs SET status=?,output_path=?,error=?,failure_reason_code=?,credits_charged=?,pages_processed=CASE WHEN ?='completed' THEN ? ELSE pages_processed END,updated_at=? WHERE job_id=?", (final_status, output_path, note if kind == 'release' else None, failure_code, pages if kind == 'capture' else 0, final_status, pages, _now(), job_id))
+
+
+
+def finish_job(job_id: str, *, output_path: str | None = None, error: str | None = None, failure_code: str | None = None) -> None:
+    job = get_job(job_id)
+    if not job:
+        raise ValueError("Unknown job")
+    success = error is None
+    _settle_reserved(job['owner_telegram_user_id'], job['credits_reserved'], job_id,
+                     'capture' if success else 'release', error or 'job completed',
+                     final_status='completed' if success else 'failed', output_path=output_path,
+                     failure_code=failure_code)
+
+
+def capture_reserved(telegram_user_id: int, pages: int, job_id: str) -> None:
+    _settle_reserved(telegram_user_id, pages, job_id, 'capture', 'job completed')
 
 
 def release_reserved(telegram_user_id: int, pages: int, job_id: str, note: str = "job failed") -> None:
-    if pages <= 0:
-        return
-    with _conn() as conn:
-        conn.execute(
-            """
-            UPDATE users
-            SET reserved_credits = CASE WHEN reserved_credits >= ? THEN reserved_credits - ? ELSE 0 END,
-                available_credits = available_credits + ?,
-                last_seen_at=?
-            WHERE telegram_user_id=?
-            """,
-            (pages, pages, pages, _now(), telegram_user_id),
-        )
-        conn.execute(
-            """
-            INSERT INTO credit_ledger (telegram_user_id, type, pages, job_id, note, created_at)
-            VALUES (?, 'release', ?, ?, ?, ?)
-            """,
-            (telegram_user_id, pages, job_id, note, _now()),
-        )
-        conn.commit()
+    _settle_reserved(telegram_user_id, pages, job_id, 'release', note)
 
 
 def create_job(
@@ -341,6 +352,16 @@ def update_job_status(
     with _conn() as conn:
         conn.execute(sql, tuple(values))
         conn.commit()
+
+
+def claim_job(job_id: str) -> bool:
+    """Only one worker may transition a queued job to running."""
+    with _conn() as conn:
+        changed = conn.execute(
+            "UPDATE jobs SET status='running',updated_at=? WHERE job_id=? AND status='queued'",
+            (_now(), job_id),
+        ).rowcount
+    return changed == 1
 
 
 def get_job(job_id: str) -> dict | None:
@@ -424,3 +445,19 @@ def set_cached_translation(source_lang: str, target_lang: str, text: str, transl
             (key, source_lang, target_lang, translated_text, _now()),
         )
         conn.commit()
+
+
+def recover_interrupted_jobs() -> list[str]:
+    """Offline maintenance only: all workers MUST be stopped by the operator."""
+    with _conn() as conn:
+        rows = conn.execute("SELECT job_id FROM jobs WHERE status='running' ORDER BY created_at").fetchall()
+    recovered = []
+    for row in rows:
+        finish_job(row['job_id'], error='Worker interrupted; reservation released during offline recovery', failure_code='WORKER_INTERRUPTED')
+        recovered.append(row['job_id'])
+    with _conn() as conn:
+        orphans = conn.execute("SELECT r.job_id,r.telegram_user_id,r.pages FROM credit_ledger r LEFT JOIN jobs j ON j.job_id=r.job_id WHERE r.type='reserve' AND j.job_id IS NULL AND NOT EXISTS (SELECT 1 FROM credit_ledger s WHERE s.job_id=r.job_id AND s.type IN ('capture','release'))").fetchall()
+    for row in orphans:
+        release_reserved(row['telegram_user_id'], row['pages'], row['job_id'], note='Offline orphan reservation recovery')
+        recovered.append(row['job_id'])
+    return recovered

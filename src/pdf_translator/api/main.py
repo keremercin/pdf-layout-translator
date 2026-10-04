@@ -3,10 +3,11 @@ from typing import Annotated
 from uuid import uuid4
 
 import fitz
-from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from pdf_translator.config import settings
+from pdf_translator.auth import require_user
 from pdf_translator.db import (
     create_job,
     get_daily_stats,
@@ -16,6 +17,7 @@ from pdf_translator.db import (
     init_db,
     list_ledger,
     reserve_credits,
+    release_reserved,
 )
 from pdf_translator.schemas import AdminGrantRequest, CreditBalanceResponse, JobResponse
 from pdf_translator.worker import process_job
@@ -66,14 +68,18 @@ async def create_translation_job(
     source_lang: str = Form(...),
     target_lang: str = Form(...),
     telegram_user_id: int = Form(...),
+    authenticated_user: int = Depends(require_user),
 ) -> dict:
+    if telegram_user_id != authenticated_user:
+        raise HTTPException(status_code=403, detail="User identity mismatch")
     _validate_lang_pair(source_lang, target_lang)
 
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
-    data = await file.read()
-    if len(data) > settings.max_file_mb * 1024 * 1024:
+    limit = settings.max_file_mb * 1024 * 1024
+    data = await file.read(limit + 1)
+    if len(data) > limit:
         raise HTTPException(status_code=413, detail="File too large")
 
     try:
@@ -83,6 +89,8 @@ async def create_translation_job(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid PDF: {exc}") from exc
 
+    if pages_total < 1:
+        raise HTTPException(status_code=400, detail="PDF must contain at least one page")
     if pages_total > settings.max_pages_per_job:
         raise HTTPException(status_code=400, detail=f"Max page limit is {settings.max_pages_per_job}")
 
@@ -91,17 +99,21 @@ async def create_translation_job(
         raise HTTPException(status_code=402, detail="Insufficient credits")
 
     input_path = str(Path(settings.upload_dir) / f"{job_id}.pdf")
-    Path(input_path).write_bytes(data)
+    try:
+        Path(input_path).write_bytes(data)
 
-    create_job(
-        job_id=job_id,
-        source_lang=source_lang.lower(),
-        target_lang=target_lang.lower(),
-        owner_telegram_user_id=telegram_user_id,
-        input_path=input_path,
-        pages_total=pages_total,
-        credits_reserved=pages_total,
-    )
+        create_job(
+            job_id=job_id,
+            source_lang=source_lang.lower(),
+            target_lang=target_lang.lower(),
+            owner_telegram_user_id=telegram_user_id,
+            input_path=input_path,
+            pages_total=pages_total,
+            credits_reserved=pages_total,
+        )
+    except Exception as exc:
+        release_reserved(telegram_user_id, pages_total, job_id, note="job creation failed")
+        raise HTTPException(status_code=500, detail="Could not persist translation job; reserved credits released") from exc
     background_tasks.add_task(process_job, job_id)
 
     job = get_job(job_id)
@@ -109,15 +121,19 @@ async def create_translation_job(
 
 
 @app.get("/v1/jobs/{job_id}")
-def get_translation_job(job_id: str) -> dict:
+def get_translation_job(job_id: str, authenticated_user: int = Depends(require_user)) -> dict:
     job = get_job(job_id)
     if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if int(job["owner_telegram_user_id"]) != authenticated_user:
         raise HTTPException(status_code=404, detail="Job not found")
     return envelope(JobResponse(**job).model_dump())
 
 
 @app.get("/v1/jobs/{job_id}/download")
-def download_translation(job_id: str, telegram_user_id: int = Query(...)):
+def download_translation(job_id: str, telegram_user_id: int = Query(...), authenticated_user: int = Depends(require_user)):
+    if telegram_user_id != authenticated_user:
+        raise HTTPException(status_code=403, detail="User identity mismatch")
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -134,7 +150,9 @@ def download_translation(job_id: str, telegram_user_id: int = Query(...)):
 
 
 @app.get("/v1/credits/{telegram_user_id}")
-def get_credits(telegram_user_id: int) -> dict:
+def get_credits(telegram_user_id: int, authenticated_user: int = Depends(require_user)) -> dict:
+    if telegram_user_id != authenticated_user:
+        raise HTTPException(status_code=403, detail="User identity mismatch")
     user = get_user(telegram_user_id)
     if not user:
         user = {

@@ -18,5 +18,8 @@ def _isolated_env(tmp_path, monkeypatch):
     monkeypatch.setattr(config.settings, "admin_api_token", "test-admin-token")
     monkeypatch.setattr(config.settings, "max_pages_per_job", 150)
 
+    monkeypatch.setattr(config.settings, "user_auth_secret", "test-secret-" * 4)
+    monkeypatch.setattr(config.settings, "openai_api_key", "")
+    monkeypatch.setattr(config.settings, "openrouter_api_key", "")
     init_db()
     yield

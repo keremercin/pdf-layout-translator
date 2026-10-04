@@ -1,104 +1,112 @@
-# pdf-layout-translator
+# PDF Layout Workbench
 
-Low-cost Telegram-first PDF translator using configurable provider models for OCR + translation.
+A Python PDF processing service with a Telegram adapter, configurable translation/OCR providers, layout replacement, authenticated job access and a durable SQLite credit ledger.
 
-## Scope (MVP S1)
-- Channel: Telegram-only
-- Language pairs: `tr,en` and `en,tr`
-- Model policy: provider-selectable (`openai` or `openrouter`)
-- Billing: credits with manual Stars verification
-- Retention: 24-hour cleanup
+![Actual local application executing the offline PDF fixture](output/playwright/pdf-workbench.png)
+
+## Engineering scope
+
+- Text-layer PDFs: extract text spans, preserve geometry and style where possible, translate and replace text.
+- Scanned pages: optional provider OCR and translation; this path needs credentials and separate quality evaluation.
+- Translation cache and bounded provider retries/timeouts.
+- Jobs with page progress, conditional worker claiming and atomic terminal status / credit settlement.
+- Signed user identities, job ownership checks and admin-only credit grants.
+- Explicit offline recovery of interrupted workers.
+
+This is a portfolio implementation. No customer usage, AI quality rate, hosting reliability or payment integration success is claimed. Credit grants are manual; Stars payment verification is not an implemented automatic payment integration.
+
+## Try the offline demonstration
+
+Python 3.10+:
+
+```bash
+python -m venv .venv
+# Linux/macOS: source .venv/bin/activate
+# PowerShell: .venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev,demo]"
+python scripts/demo_offline.py
+python -m streamlit run demo_app.py
+```
+
+The demonstration creates a one-page synthetic English report and uses four predefined ASCII Turkish translations. It executes the **actual PDF layout pipeline**, asserts every expected translated string and writes source/processed PDFs, PNGs and `output/demo/run.json`. The UI button repeats that process and offers downloads. No provider is contacted. This demonstrates layout processing, not AI translation quality or OCR accuracy. The recorded run processed one text-layer page and zero OCR pages.
+
+## Service configuration
+
+Copy `.env.example` to an untracked `.env`. Set `USER_AUTH_SECRET` to a cryptographically random value of at least 32 characters in both the API and trusted bot environments. Generate locally:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Do not commit the generated value or distribute it to public/browser clients. Set a separate `ADMIN_API_TOKEN`. Provider operation additionally requires `MODEL_PROVIDER` and the corresponding provider credentials/models in `.env.example`; no live provider test is required for the offline demo.
+
+```bash
+python scripts/init_db.py
+python -m uvicorn pdf_translator.api.main:app --host 127.0.0.1 --port 8900
+```
+
+The Telegram adapter signs `update.effective_user.id` and sends `X-User-Token` to the API. Tokens use HMAC-SHA256, expire after an hour and are issued only by trusted server-side code. Form/query/path user IDs must match the signed identity. Job metadata and downloads require ownership. Missing secret configuration returns 503; invalid/expired tokens return 401. There is no public signing endpoint.
+
+Hosted operation requires HTTPS. Tokens remain replayable until expiry; individual revocation and browser login are not implemented. Secret rotation requires updating both services. The offline UI does not expose authentication secrets or exercise Telegram/payment flows.
 
 ## API
-- `GET /health`
-- `GET /version`
-- `POST /v1/jobs` (multipart: file, source_lang, target_lang, telegram_user_id)
-- `GET /v1/jobs/{job_id}`
-- `GET /v1/jobs/{job_id}/download?telegram_user_id=...`
-- `GET /v1/credits/{telegram_user_id}`
-- `POST /v1/admin/credits/grant` (Header: `x-admin-token`)
-- `GET /v1/admin/jobs/stats` (Header: `x-admin-token`)
 
-## Quickstart
-```bash
-cp .env.example .env
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .[dev]
-python scripts/init_db.py
-uvicorn pdf_translator.api.main:app --reload --port 8900
+| Endpoint | Access |
+| --- | --- |
+| `GET /health`, `/version` | Public service metadata |
+| `POST /v1/jobs` | Signed user; multipart PDF/languages/user ID |
+| `GET /v1/jobs/{job_id}` | Signed owner |
+| `GET /v1/jobs/{job_id}/download?telegram_user_id=...` | Signed owner |
+| `GET /v1/credits/{telegram_user_id}` | Signed matching user |
+| `POST /v1/admin/credits/grant` | `X-Admin-Token` |
+| `GET /v1/admin/jobs/stats` | `X-Admin-Token` |
+
+Supported language pairs are TR→EN and EN→TR. Upload reads are bounded by the configured limit. Caught upload-write/job-create errors release the reservation and return a generic 500. The default SQLite database and local files are local persistence, not a distributed job queue.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    User[Telegram user] --> Bot[Trusted bot / signed identity]
+    Bot --> API[FastAPI / ownership checks]
+    API --> DB[(SQLite jobs / credit ledger)]
+    API --> Worker[Conditional queued-job claim]
+    Worker --> PDF[Text spans / optional OCR]
+    PDF --> Cache[(Translation cache)]
+    PDF --> Provider[Optional translation provider]
+    PDF --> Output[Processed PDF]
+    Worker --> Final[Atomic settlement and terminal status]
+    Final --> DB
 ```
 
-For OpenAI-first testing:
-- `MODEL_PROVIDER=openai`
-- `OPENAI_API_KEY=...`
-- Suggested starter models: `OPENAI_TRANSLATE_MODEL=gpt-4.1-mini`, `OPENAI_OCR_MODEL=gpt-4.1-mini`
+## Reliability and recovery
 
-## OpenAI presets
-- `./.env.openai.min-cost`: lower cost (`translate=gpt-4.1-nano`, `ocr=gpt-4.1-mini`)
-- `./.env.openai.balanced`: safer quality baseline (`translate=gpt-4.1-mini`, `ocr=gpt-4.1-mini`)
-- `./.env.local`: put only your secret key here (`OPENAI_API_KEY=...`), this file is git-ignored
+Reservations check and update balances in a SQLite write transaction. Repeated reservation or settlement does not move credit twice. Settlement must match the original user and amount; conflicting capture/release operations are rejected. One worker may claim each queued job. Terminal status, output metadata and credit settlement commit together; an injected database-write failure test verifies rollback.
 
-Usage:
+Total deadlines use a monotonic clock and are checked at page boundaries and before charging. They do not forcibly interrupt an in-flight provider request. Provider call timeouts are separate.
+
+After interruption, **stop the API and every worker**, then run:
+
 ```bash
-cp .env.openai.balanced .env   # or .env.openai.min-cost
-cp .env.local.example .env.local
-# edit .env.local and set OPENAI_API_KEY
+python scripts/recover_jobs.py --workers-stopped
 ```
 
-## Pre-Telegram model smoke test
-Run model-level PDF validation (text-layer + scanned-like):
+The flag is an operator assertion, not process detection. The command marks interrupted running jobs failed, releases credit once, preserves queued jobs and deletes no files. It must not run as live scheduled maintenance. It does not resume partially translated pages, detect active workers, or detect active workers. It also releases unsettled reservations whose job record was never created.
+
+## Verification
+
 ```bash
-make smoke-model
-```
-This command creates sample PDFs under `data/smoke/`, opens jobs through the API app, waits for completion, and saves translated outputs under `outputs/`.
-
-## Single fixed reference PDF (always use this)
-Reference test file:
-- `data/fixtures/reference_english.pdf`
-- Source: `https://arxiv.org/pdf/1706.03762.pdf`
-
-Run fixed-file smoke:
-```bash
-make smoke-reference
-```
-Output file:
-- `outputs/reference_english_en_tr.translated.pdf`
-
-Tuning (same reference PDF, faster loops):
-- `SMOKE_REFERENCE_PAGES=5` (default, first 5 pages)
-- `SMOKE_REFERENCE_PAGES=15` (full file)
-- `SMOKE_REFERENCE_TIMEOUT_SEC=420`
-
-## Candidate benchmark (our engine vs external tools)
-Run a quick layout benchmark on first 2 pages:
-```bash
-python scripts/benchmark_layout_candidates.py
-```
-Expected candidate paths:
-- `outputs/reference_english_en_tr.translated.pdf`
-- `outputs/bench_pdf2zh/reference_english-mono.pdf`
-- `outputs/bench_pdf2zh_babeldoc/reference_english.tr.mono.pdf`
-
-## Telegram bot
-```bash
-export TELEGRAM_BOT_TOKEN=...
-python -m pdf_translator.bot.telegram_bot
+python -m pytest -q
+python -m ruff check src/pdf_translator/db.py src/pdf_translator/worker.py src/pdf_translator/auth.py scripts/demo_offline.py scripts/recover_jobs.py demo_app.py
 ```
 
-## Credits and manual payment flow
-1. User checks `/pricing`
-2. User requests `/buy` and receives reference code
-3. Admin verifies Stars payment externally
-4. Admin grants credits via `POST /v1/admin/credits/grant`
+Latest local suite: **23 tests passed**. Tests explicitly clear inherited provider credentials and use isolated databases. Coverage includes access/ownership, concurrent reservation/claim, duplicate refund prevention, atomic rollback, offline recovery, creation compensation and worker deadlines. These results do not prove live provider behavior. The UI was exercised in Chromium and its demonstration button completed successfully; the screenshot is from that running application.
 
-## Cleanup
-Run periodic cleanup (cron):
-```bash
-python scripts/cleanup_expired.py
-```
+## Remaining limits
 
-## Notes
-- Page limit per job: 150
-- File size limit: 80MB
-- Layout preservation is block-based (best effort)
+- Complex tables, overlapping text, font substitution and long translated text can distort layout. A small fixture is insufficient to measure preservation quality.
+- Scanned OCR and live translation quality are unverified in the current local run.
+- No distributed leases, automatic crash recovery or partial-page continuation.
+- Hard termination between reservation and job creation requires the explicit offline recovery command; no automatic recovery is scheduled.
+- Retention cleanup scripts exist but are not automatically scheduled by this README; inspect them before use.
+- Admin statistics contain heuristic cost estimates, not actual provider billing data.

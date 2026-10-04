@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     retention_hours: int = 24
 
     admin_api_token: str = ""
+    user_auth_secret: str = ""
     api_base_url: str = "http://localhost:8900"
     telegram_bot_token: str = ""
 
